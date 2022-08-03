@@ -41,6 +41,16 @@ class Ros2Handler(EventHandler):
         """Create a Ros2Handler."""
         # Link a ROS trace event to its corresponding handling method
         handler_map: HandlerMap = {
+            'dds:create_writer':
+                self._handle_dds_create_writer,
+            'dds:create_reader':
+                self._handle_dds_create_reader,
+            'dds:write_pre':
+                self._handle_dds_write_pre,
+            'dds:write':
+                self._handle_dds_write,
+            'dds:read':
+                self._handle_dds_read,
             'ros2:rcl_init':
                 self._handle_rcl_init,
             'ros2:rcl_node_init':
@@ -110,6 +120,50 @@ class Ros2Handler(EventHandler):
     @property
     def data(self) -> Ros2DataModel:
         return super().data  # type: ignore
+
+    def _handle_dds_create_writer(
+        self, event: Dict, metadata: EventMetadata,
+    ) -> None:
+        timestamp = metadata.timestamp
+        writer = get_field(event, 'writer')
+        topic_name = get_field(event, 'topic_name')
+        gid_prefix = get_field(event, 'gid_prefix')
+        gid_entity = get_field(event, 'gid_entity')
+        self.data.add_dds_writer(timestamp, writer, topic_name, gid_prefix, gid_entity)
+
+    def _handle_dds_create_reader(
+        self, event: Dict, metadata: EventMetadata,
+    ) -> None:
+        timestamp = metadata.timestamp
+        reader = get_field(event, 'reader')
+        topic_name = get_field(event, 'topic_name')
+        gid_prefix = get_field(event, 'gid_prefix')
+        gid_entity = get_field(event, 'gid_entity')
+        self.data.add_dds_reader(timestamp, reader, topic_name, gid_prefix, gid_entity)
+
+    def _handle_dds_write_pre(
+        self, event: Dict, metadata: EventMetadata,
+    ) -> None:
+        timestamp = metadata.timestamp
+        writer = get_field(event, 'writer')
+        data = get_field(event, 'data')
+        self.data.add_dds_write_pre_instance(timestamp, writer, data)
+
+    def _handle_dds_write(
+        self, event: Dict, metadata: EventMetadata,
+    ) -> None:
+        timestamp = metadata.timestamp
+        writer = get_field(event, 'writer')
+        msg_timestamp = get_field(event, 'timestamp')
+        self.data.add_dds_write_instance(timestamp, writer, msg_timestamp)
+
+    def _handle_dds_read(
+        self, event: Dict, metadata: EventMetadata,
+    ) -> None:
+        timestamp = metadata.timestamp
+        reader = get_field(event, 'reader')
+        buffer = get_field(event, 'buffer')
+        self.data.add_dds_read_instance(timestamp, reader, buffer)
 
     def _handle_rcl_init(
         self, event: Dict, metadata: EventMetadata,
@@ -318,7 +372,8 @@ class Ros2Handler(EventHandler):
                 callback_object,
                 metadata_start.timestamp,
                 duration,
-                bool(is_intra_process))
+                bool(is_intra_process)
+            )
         else:
             print(f'No matching callback start for callback object "{callback_object}"')
 

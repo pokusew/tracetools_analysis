@@ -33,6 +33,8 @@ class Ros2DataModel(DataModel):
         """Create a Ros2DataModel."""
         super().__init__()
         # Objects (one-time events, usually when something is created)
+        self._dds_writers: DataModelIntermediateStorage = []
+        self._dds_readers: DataModelIntermediateStorage = []
         self._contexts: DataModelIntermediateStorage = []
         self._nodes: DataModelIntermediateStorage = []
         self._rmw_publishers: DataModelIntermediateStorage = []
@@ -48,6 +50,9 @@ class Ros2DataModel(DataModel):
         self._callback_symbols: DataModelIntermediateStorage = []
         self._lifecycle_state_machines: DataModelIntermediateStorage = []
         # Events (multiple instances, may not have a meaningful index)
+        self._dds_write_pre_instances: DataModelIntermediateStorage = []
+        self._dds_write_instances: DataModelIntermediateStorage = []
+        self._dds_read_instances: DataModelIntermediateStorage = []
         self._rclcpp_publish_instances: DataModelIntermediateStorage = []
         self._rcl_publish_instances: DataModelIntermediateStorage = []
         self._rmw_publish_instances: DataModelIntermediateStorage = []
@@ -56,6 +61,55 @@ class Ros2DataModel(DataModel):
         self._rclcpp_take_instances: DataModelIntermediateStorage = []
         self._callback_instances: DataModelIntermediateStorage = []
         self._lifecycle_transitions: DataModelIntermediateStorage = []
+
+    def add_dds_writer(
+        self, timestamp, writer, topic_name, gid_prefix, gid_entity
+    ) -> None:
+        self._dds_writers.append({
+            'timestamp': timestamp,
+            'writer': writer,
+            'topic_name': topic_name,
+            'gid_prefix': gid_prefix,
+            'gid_entity': gid_entity,
+        })
+
+    def add_dds_reader(
+        self, timestamp, reader, topic_name, gid_prefix, gid_entity
+    ) -> None:
+        self._dds_readers.append({
+            'timestamp': timestamp,
+            'reader': reader,
+            'topic_name': topic_name,
+            'gid_prefix': gid_prefix,
+            'gid_entity': gid_entity,
+        })
+
+    def add_dds_write_pre_instance(
+        self, timestamp, writer, data
+    ) -> None:
+        self._dds_write_pre_instances.append({
+            'timestamp': timestamp,
+            'writer': writer,
+            'data': data,
+        })
+
+    def add_dds_write_instance(
+        self, timestamp, writer, msg_timestamp
+    ) -> None:
+        self._dds_write_instances.append({
+            'timestamp': timestamp,
+            'writer': writer,
+            'msg_timestamp': msg_timestamp,
+        })
+
+    def add_dds_read_instance(
+        self, timestamp, reader, buffer
+    ) -> None:
+        self._dds_read_instances.append({
+            'timestamp': timestamp,
+            'reader': reader,
+            'buffer': buffer,
+        })
 
     def add_context(
         self, context_handle, timestamp, pid, version
