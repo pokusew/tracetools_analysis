@@ -23,6 +23,7 @@ from typing import Optional
 from typing import Union
 
 import numpy as np
+import pandas as pd
 from pandas import concat
 from pandas import DataFrame
 
@@ -107,21 +108,21 @@ class Ros2DataModelUtil(DataModelUtil):
             pretty = pretty[:(len(pretty) - len('const'))] + ' ' + 'const'
         return pretty
 
-    def get_callback_symbols(self) -> Mapping[int, str]:
+    def get_callback_symbols(self) -> pd.DataFrame:
         """
         Get mappings between a callback object and its resolved symbol.
 
         :return: the map
         """
-        callback_instances = self.data.callback_instances
-        callback_symbols = self.data.callback_symbols
+        callback_objects_with_symbols = pd.merge(
+            left=self.data.callback_objects,
+            right=self.data.callback_symbols,
+            left_index=True,
+            right_index=True,
+            suffixes=('_object', '_symbol'),
+        )
 
-        # Get a list of callback objects
-        callback_objects = set(callback_instances['callback_object'])
-        # Get their symbol
-        return {
-            obj: self._prettify(callback_symbols.loc[obj, 'symbol']) for obj in callback_objects
-        }
+        return callback_objects_with_symbols
 
     def get_tids(self) -> List[str]:
         """Get a list of thread ids corresponding to the nodes."""
