@@ -15,7 +15,7 @@
 
 """Module for ROS 2 data model."""
 
-from typing import List
+from typing import List, Tuple, Dict, Any
 
 import numpy as np
 import pandas as pd
@@ -23,6 +23,38 @@ import pandas as pd
 from . import DataModel
 from . import DataModelIntermediateStorage
 from ..processor import EventMetadata
+
+
+Obj = Dict[str, Any]
+
+PID = int
+LocalHandle = int
+
+GlobalHandle = Tuple[PID, LocalHandle]
+"""
+Unique identification of a ROS 2 object consisting of a PID and a memory pointer.
+
+TODO: Also add host to support multi-hosts analysis (pid + memory pointer is unique only within one host).
+"""
+
+MessageHandle = GlobalHandle
+"""
+MessageHandle can be repeated for many messages within same process.
+It can NOT be used to match publications and subscriptions.
+"""
+
+CallbackHandle = GlobalHandle
+
+Timestamp = int
+TopicName = str
+# TODO: switch to gid once rmw_cyclonedds correctly supports it
+# MessageUID = Tuple[int, Tuple[int, ...]]
+MessageUID = Tuple[Timestamp, TopicName]
+"""
+MessageUID uniquely identifies a specific message in that was published in the system.
+It is
+It can be used to match publications and subscriptions (one to many).
+"""
 
 
 class Ros2DataModel(DataModel):
@@ -37,35 +69,56 @@ class Ros2DataModel(DataModel):
         super().__init__()
 
         # Objects (one-time events, usually when something is created)
+
+        # DDS writers are created for publishers and services (and actions) by RMW
         self._dds_writers: DataModelIntermediateStorage = []
+        # DDS readers are created for subscriptions and services (and actions) by RMW
         self._dds_readers: DataModelIntermediateStorage = []
-        self._contexts: DataModelIntermediateStorage = []
-        self._nodes: DataModelIntermediateStorage = []
+
+        self._rcl_contexts: DataModelIntermediateStorage = []
+
+        # TODO: How to correctly associate rcl_context with rcl_node?
+        #       Is it possible at all (given current tracepoints)?
+
+        self._rcl_nodes: DataModelIntermediateStorage = []
+
+        # When a publisher is created, the sequence of events is:
+        # 1. dds:create_writer -> 2. ros2:rmw_publisher_init -> 3. ros2:rcl_publisher_init
         self._rmw_publishers: DataModelIntermediateStorage = []
         self._rcl_publishers: DataModelIntermediateStorage = []
+
+        # When a subscription is created, the sequence of events is:
+        # 1. dds:create_reader -> 2. ros2:rmw_subscription_init -> 3. ros2:rcl_subscription_init
+        # 4. -> ros2:rclcpp_subscription_init
         self._rmw_subscriptions: DataModelIntermediateStorage = []
         self._rcl_subscriptions: DataModelIntermediateStorage = []
         self._rclcpp_subscriptions: DataModelIntermediateStorage = []
-        self._services: DataModelIntermediateStorage = []
-        self._clients: DataModelIntermediateStorage = []
-        self._timers: DataModelIntermediateStorage = []
+
+        self._rcl_services: DataModelIntermediateStorage = []
+        self._rcl_clients: DataModelIntermediateStorage = []
+        self._rcl_timers: DataModelIntermediateStorage = []
         self._timer_node_links: DataModelIntermediateStorage = []
         self._callback_objects: DataModelIntermediateStorage = []
         self._callback_symbols: DataModelIntermediateStorage = []
         self._lifecycle_state_machines: DataModelIntermediateStorage = []
 
         # Events (multiple instances, may not have a meaningful index)
-        self._dds_write_pre_instances: DataModelIntermediateStorage = []
+
         self._dds_write_instances: DataModelIntermediateStorage = []
+
         self._dds_read_instances: DataModelIntermediateStorage = []
+        # publish flow: rclcpp/rclpy publish -> rcl publish -> rmw publish -> dds write
         self._rclcpp_publish_instances: DataModelIntermediateStorage = []
         self._rcl_publish_instances: DataModelIntermediateStorage = []
         self._rmw_publish_instances: DataModelIntermediateStorage = []
+
         self._rmw_take_instances: DataModelIntermediateStorage = []
         self._rcl_take_instances: DataModelIntermediateStorage = []
         self._rclcpp_take_instances: DataModelIntermediateStorage = []
+
         self._callback_instances: DataModelIntermediateStorage = []
-        self._lifecycle_transitions: DataModelIntermediateStorage = []
+
+        self._rcl_lifecycle_transitions: DataModelIntermediateStorage = []
 
     @staticmethod
     def get_unique_index(data: DataModelIntermediateStorage, keys: List[str]) -> pd.MultiIndex:
@@ -89,115 +142,108 @@ class Ros2DataModel(DataModel):
 
     def add_dds_writer(
         self, metadata: EventMetadata,
-        writer: int, topic_name: str, gid_prefix: List[int], gid_entity: List[int],
-    ) -> None:
-        self._dds_writers.append({
+        dds_writer_handle: int, dds_topic_name: str,
+        gid_prefix: Tuple[int, ...], gid_entity: Tuple[int, ...], gid: Tuple[int, ...],
+    ) -> Dict[str, Any]:
+        obj = {
             'timestamp': metadata.timestamp,
             'pid': metadata.pid,
             'tid': metadata.tid,
             'cpu_id': metadata.cpu_id,
 
-            'writer': writer,
-            'topic_name': topic_name,
+            'dds_writer_handle': dds_writer_handle,
+            'dds_topic_name': dds_topic_name,
             'gid_prefix': gid_prefix,
             'gid_entity': gid_entity,
-        })
+            'gid': gid,
+        }
+        self._dds_writers.append(obj)
+        return obj
 
     def _finalize_dds_writers(self):
         self.dds_writers = self._to_dataframe(
             data=self._dds_writers,
-            key='writer',
-            columns=['topic_name', 'gid_prefix', 'gid_entity'],
+            key='dds_writer_handle',
+            columns=['dds_topic_name', 'gid_prefix', 'gid_entity', 'gid'],
         )
 
     def add_dds_reader(
         self, metadata: EventMetadata,
-        reader: int, topic_name: str, gid_prefix: List[int], gid_entity: List[int],
-    ) -> None:
-        self._dds_readers.append({
+        dds_reader_handle: int, dds_topic_name: str,
+        gid_prefix: Tuple[int, ...], gid_entity: Tuple[int, ...], gid: Tuple[int, ...],
+    ) -> Dict[str, Any]:
+        obj = {
             'timestamp': metadata.timestamp,
             'pid': metadata.pid,
             'tid': metadata.tid,
             'cpu_id': metadata.cpu_id,
 
-            'reader': reader,
-            'topic_name': topic_name,
+            'dds_reader_handle': dds_reader_handle,
+            'dds_topic_name': dds_topic_name,
             'gid_prefix': gid_prefix,
             'gid_entity': gid_entity,
-        })
+            'gid': gid,
+        }
+        self._dds_readers.append(obj)
+        return obj
 
     def _finalize_dds_readers(self):
         self.dds_readers = self._to_dataframe(
             data=self._dds_readers,
-            key='reader',
-            columns=['topic_name', 'gid_prefix', 'gid_entity'],
-        )
-
-    def add_dds_write_pre_instance(
-        self, metadata: EventMetadata,
-        writer: int, data: int,
-    ) -> None:
-        self._dds_write_pre_instances.append({
-            'timestamp': metadata.timestamp,
-            'pid': metadata.pid,
-            'tid': metadata.tid,
-            'cpu_id': metadata.cpu_id,
-
-            'writer': writer,
-            'data': data,
-        })
-
-    def _finalize_dds_write_pre_instances(self):
-        self.dds_write_pre_instances = pd.DataFrame(
-            data=self._dds_write_pre_instances,
-            columns=['timestamp', 'pid', 'tid', 'cpu_id', 'writer', 'data'],
+            key='dds_reader_handle',
+            columns=['dds_topic_name', 'gid_prefix', 'gid_entity', 'gid'],
         )
 
     def add_dds_write_instance(
         self, metadata: EventMetadata,
-        writer: int, msg_timestamp: int,
-    ) -> None:
-        self._dds_write_instances.append({
+        dds_writer_handle: int, message_handle: int, message_timestamp: int,
+    ) -> Dict[str, Any]:
+        obj = {
             'timestamp': metadata.timestamp,
             'pid': metadata.pid,
             'tid': metadata.tid,
             'cpu_id': metadata.cpu_id,
 
-            'writer': writer,
-            'msg_timestamp': msg_timestamp,
-        })
+            'dds_writer_handle': dds_writer_handle,
+            'message_handle': message_handle,
+            'message_timestamp': message_timestamp,
+        }
+        self._dds_write_instances.append(obj)
+        return obj
 
     def _finalize_dds_write_instances(self):
         self.dds_write_instances = pd.DataFrame(
             data=self._dds_write_instances,
-            columns=['timestamp', 'pid', 'tid', 'cpu_id', 'writer', 'msg_timestamp'],
+            columns=['timestamp', 'pid', 'tid', 'cpu_id', 'dds_writer_handle', 'message_handle', 'message_timestamp'],
         )
 
     def add_dds_read_instance(
         self, metadata: EventMetadata,
-        reader: int, buffer: int,
-    ) -> None:
-        self._dds_read_instances.append({
+        dds_reader_handle: int, message_handle: int,
+    ) -> Dict[str, Any]:
+        obj = {
             'timestamp': metadata.timestamp,
             'pid': metadata.pid,
             'tid': metadata.tid,
             'cpu_id': metadata.cpu_id,
 
-            'reader': reader,
-            'buffer': buffer,
-        })
+            'dds_reader_handle': dds_reader_handle,
+            'message_handle': message_handle,
+        }
+        self._dds_read_instances.append(obj)
+        return obj
 
     def _finalize_dds_read_instances(self):
         self.dds_read_instances = pd.DataFrame(
             data=self._dds_read_instances,
-            columns=['timestamp', 'pid', 'tid', 'cpu_id', 'reader', 'buffer'],
+            columns=['timestamp', 'pid', 'tid', 'cpu_id', 'dds_reader_handle', 'message_handle'],
         )
 
-    def add_context(
+    def add_rcl_context(
         self, metadata: EventMetadata,
         rcl_context_handle: int, tracetools_version: str,
-    ) -> None:
-        self._contexts.append({
+    ) -> Dict[str, Any]:
+        obj = {
             'timestamp': metadata.timestamp,
             'pid': metadata.pid,
             'tid': metadata.tid,
@@ -205,20 +251,22 @@ class Ros2DataModel(DataModel):
 
             'rcl_context_handle': rcl_context_handle,
             'tracetools_version': tracetools_version,
-        })
+        }
+        self._rcl_contexts.append(obj)
+        return obj
 
-    def _finalize_contexts(self):
-        self.contexts = self._to_dataframe(
-            data=self._contexts,
+    def _finalize_rcl_contexts(self):
+        self.rcl_contexts = self._to_dataframe(
+            data=self._rcl_contexts,
             key='rcl_context_handle',
             columns=['tracetools_version'],
         )
 
-    def add_node(
+    def add_rcl_node(
         self, metadata: EventMetadata,
         rcl_node_handle: int, rmw_node_handle: int, name: str, namespace: str,
-    ) -> None:
-        self._nodes.append({
+    ) -> Dict[str, Any]:
+        obj = {
             'timestamp': metadata.timestamp,
             'pid': metadata.pid,
             'tid': metadata.tid,
@@ -228,20 +276,22 @@ class Ros2DataModel(DataModel):
             'rmw_node_handle': rmw_node_handle,
             'name': name,
             'namespace': namespace,
-        })
+        }
+        self._rcl_nodes.append(obj)
+        return obj
 
-    def _finalize_nodes(self):
-        self.nodes = self._to_dataframe(
-            data=self._nodes,
+    def _finalize_rcl_nodes(self):
+        self.rcl_nodes = self._to_dataframe(
+            data=self._rcl_nodes,
             key='rcl_node_handle',
             columns=['rmw_node_handle', 'name', 'namespace'],
         )
 
     def add_rmw_publisher(
         self, metadata: EventMetadata,
-        rmw_publisher_handle: int, gid: List[int],
-    ) -> None:
-        self._rmw_publishers.append({
+        rmw_publisher_handle: int, gid: Tuple[int, ...],
+    ) -> Dict[str, Any]:
+        obj = {
             'timestamp': metadata.timestamp,
             'pid': metadata.pid,
             'tid': metadata.tid,
@@ -249,7 +299,9 @@ class Ros2DataModel(DataModel):
 
             'rmw_publisher_handle': rmw_publisher_handle,
             'gid': gid,
-        })
+        }
+        self._rmw_publishers.append(obj)
+        return obj
 
     def _finalize_rmw_publishers(self):
         self.rmw_publishers = self._to_dataframe(
@@ -262,8 +314,8 @@ class Ros2DataModel(DataModel):
         self, metadata: EventMetadata,
         rcl_publisher_handle: int, rcl_node_handle: int, rmw_publisher_handle: int,
         topic_name: str, depth: int
-    ) -> None:
-        self._rcl_publishers.append({
+    ) -> Dict[str, Any]:
+        obj = {
             'timestamp': metadata.timestamp,
             'pid': metadata.pid,
             'tid': metadata.tid,
@@ -274,7 +326,9 @@ class Ros2DataModel(DataModel):
             'rmw_publisher_handle': rmw_publisher_handle,
             'topic_name': topic_name,
             'depth': depth,
-        })
+        }
+        self._rcl_publishers.append(obj)
+        return obj
 
     def _finalize_rcl_publishers(self):
         self.rcl_publishers = self._to_dataframe(
@@ -285,67 +339,73 @@ class Ros2DataModel(DataModel):
 
     def add_rclcpp_publish_instance(
         self, metadata: EventMetadata,
-        message: int,
-    ) -> None:
-        self._rclcpp_publish_instances.append({
+        message_handle: int,
+    ) -> Dict[str, Any]:
+        obj = {
             'timestamp': metadata.timestamp,
             'pid': metadata.pid,
             'tid': metadata.tid,
             'cpu_id': metadata.cpu_id,
 
-            'message': message,
-        })
+            'message_handle': message_handle,
+        }
+        self._rclcpp_publish_instances.append(obj)
+        return obj
 
     def _finalize_rclcpp_publish_instances(self):
         self.rclcpp_publish_instances = pd.DataFrame(
             data=self._rclcpp_publish_instances,
-            columns=['timestamp', 'pid', 'tid', 'cpu_id', 'message'],
+            columns=['timestamp', 'pid', 'tid', 'cpu_id', 'message_handle'],
         )
 
     def add_rcl_publish_instance(
         self, metadata: EventMetadata,
-        rcl_publisher_handle: int, message: int,
-    ) -> None:
-        self._rcl_publish_instances.append({
+        rcl_publisher_handle: int, message_handle: int,
+    ) -> Dict[str, Any]:
+        obj = {
             'timestamp': metadata.timestamp,
             'pid': metadata.pid,
             'tid': metadata.tid,
             'cpu_id': metadata.cpu_id,
 
             'rcl_publisher_handle': rcl_publisher_handle,
-            'message': message,
-        })
+            'message_handle': message_handle,
+        }
+        self._rcl_publish_instances.append(obj)
+        return obj
 
     def _finalize_rcl_publish_instances(self):
         self.rcl_publish_instances = pd.DataFrame(
             data=self._rcl_publish_instances,
-            columns=['timestamp', 'pid', 'tid', 'cpu_id', 'rcl_publisher_handle', 'message'],
+            columns=['timestamp', 'pid', 'tid', 'cpu_id', 'rcl_publisher_handle', 'message_handle'],
         )
 
     def add_rmw_publish_instance(
         self, metadata: EventMetadata,
-        message: int,
-    ) -> None:
-        self._rmw_publish_instances.append({
+        message_handle: int,
+    ) -> Dict[str, Any]:
+        obj = {
             'timestamp': metadata.timestamp,
             'pid': metadata.pid,
             'tid': metadata.tid,
             'cpu_id': metadata.cpu_id,
 
-            'message': message,
-        })
+            'message_handle': message_handle,
+        }
+        self._rmw_publish_instances.append(obj)
+        return obj
 
     def _finalize_rmw_publish_instances(self):
         self.rmw_publish_instances = pd.DataFrame(
             data=self._rmw_publish_instances,
-            columns=['timestamp', 'pid', 'tid', 'cpu_id', 'message'],
+            columns=['timestamp', 'pid', 'tid', 'cpu_id', 'message_handle'],
         )
 
     def add_rmw_subscription(
         self, metadata: EventMetadata,
-        rmw_subscription_handle: int, gid: List[int],
-    ) -> None:
-        self._rmw_subscriptions.append({
+        rmw_subscription_handle: int, gid: Tuple[int, ...],
+    ) -> Dict[str, Any]:
+        obj = {
             'timestamp': metadata.timestamp,
             'pid': metadata.pid,
             'tid': metadata.tid,
@@ -353,7 +413,9 @@ class Ros2DataModel(DataModel):
 
             'rmw_subscription_handle': rmw_subscription_handle,
             'gid': gid,
-        })
+        }
+        self._rmw_subscriptions.append(obj)
+        return obj
 
     def _finalize_rmw_subscriptions(self):
         self.rmw_subscriptions = self._to_dataframe(
@@ -366,8 +428,8 @@ class Ros2DataModel(DataModel):
         self, metadata: EventMetadata,
         rcl_subscription_handle: int, rcl_node_handle: int, rmw_subscription_handle: int,
         topic_name: str, depth: int,
-    ) -> None:
-        self._rcl_subscriptions.append({
+    ) -> Dict[str, Any]:
+        obj = {
             'timestamp': metadata.timestamp,
             'pid': metadata.pid,
             'tid': metadata.tid,
@@ -378,7 +440,9 @@ class Ros2DataModel(DataModel):
             'rmw_subscription_handle': rmw_subscription_handle,
             'topic_name': topic_name,
             'depth': depth,
-        })
+        }
+        self._rcl_subscriptions.append(obj)
+        return obj
 
     def _finalize_rcl_subscriptions(self):
         self.rcl_subscriptions = self._to_dataframe(
@@ -390,8 +454,8 @@ class Ros2DataModel(DataModel):
     def add_rclcpp_subscription(
         self, metadata: EventMetadata,
         rclcpp_subscription_handle: int, rcl_subscription_handle: int,
-    ) -> None:
-        self._rclcpp_subscriptions.append({
+    ) -> Dict[str, Any]:
+        obj = {
             'timestamp': metadata.timestamp,
             'pid': metadata.pid,
             'tid': metadata.tid,
@@ -399,7 +463,9 @@ class Ros2DataModel(DataModel):
 
             'rclcpp_subscription_handle': rclcpp_subscription_handle,
             'rcl_subscription_handle': rcl_subscription_handle,
-        })
+        }
+        self._rclcpp_subscriptions.append(obj)
+        return obj
 
     def _finalize_rclcpp_subscriptions(self):
         self.rclcpp_subscriptions = self._to_dataframe(
@@ -408,11 +474,11 @@ class Ros2DataModel(DataModel):
             columns=['rcl_subscription_handle'],
         )
 
-    def add_service(
+    def add_rcl_service(
         self, metadata: EventMetadata,
-        rcl_service_handle: int, rcl_node_handle: int, rmw_service_handle: int, service_name: str,
-    ) -> None:
-        self._services.append({
+        rcl_service_handle: int, rcl_node_handle: int, rmw_service_handle: int, rcl_service_name: str,
+    ) -> Dict[str, Any]:
+        obj = {
             'timestamp': metadata.timestamp,
             'pid': metadata.pid,
             'tid': metadata.tid,
@@ -421,21 +487,23 @@ class Ros2DataModel(DataModel):
             'rcl_service_handle': rcl_service_handle,
             'rcl_node_handle': rcl_node_handle,
             'rmw_service_handle': rmw_service_handle,
-            'service_name': service_name,
-        })
+            'rcl_service_name': rcl_service_name,
+        }
+        self._rcl_services.append(obj)
+        return obj
 
-    def _finalize_services(self):
-        self.services = self._to_dataframe(
-            data=self._services,
+    def _finalize_rcl_services(self):
+        self.rcl_services = self._to_dataframe(
+            data=self._rcl_services,
             key='rcl_service_handle',
             columns=['rcl_node_handle', 'rmw_service_handle', 'service_name'],
         )
 
-    def add_client(
+    def add_rcl_client(
         self, metadata: EventMetadata,
-        rcl_client_handle: int, rcl_node_handle: int, rmw_client_handle: int, service_name: str,
-    ) -> None:
-        self._clients.append({
+        rcl_client_handle: int, rcl_node_handle: int, rmw_client_handle: int, rcl_service_name: str,
+    ) -> Dict[str, Any]:
+        obj = {
             'timestamp': metadata.timestamp,
             'pid': metadata.pid,
             'tid': metadata.tid,
@@ -444,21 +512,23 @@ class Ros2DataModel(DataModel):
             'rcl_client_handle': rcl_client_handle,
             'rcl_node_handle': rcl_node_handle,
             'rmw_client_handle': rmw_client_handle,
-            'service_name': service_name,
-        })
+            'rcl_service_name': rcl_service_name,
+        }
+        self._rcl_clients.append(obj)
+        return obj
 
-    def _finalize_clients(self):
-        self.clients = self._to_dataframe(
-            data=self._clients,
+    def _finalize_rcl_clients(self):
+        self.rcl_clients = self._to_dataframe(
+            data=self._rcl_clients,
             key='rcl_client_handle',
             columns=['rcl_node_handle', 'rmw_client_handle', 'service_name'],
         )
 
-    def add_timer(
+    def add_rcl_timer(
         self, metadata: EventMetadata,
         rcl_timer_handle: int, period: int,
-    ) -> None:
-        self._timers.append({
+    ) -> Dict[str, Any]:
+        obj = {
             'timestamp': metadata.timestamp,
             'pid': metadata.pid,
             'tid': metadata.tid,
@@ -466,11 +536,13 @@ class Ros2DataModel(DataModel):
 
             'rcl_timer_handle': rcl_timer_handle,
             'period': period,
-        })
+        }
+        self._rcl_timers.append(obj)
+        return obj
 
-    def _finalize_timers(self):
-        self.timers = self._to_dataframe(
-            data=self._timers,
+    def _finalize_rcl_timers(self):
+        self.rcl_timers = self._to_dataframe(
+            data=self._rcl_timers,
             key='rcl_timer_handle',
             columns=['period'],
         )
@@ -478,8 +550,8 @@ class Ros2DataModel(DataModel):
     def add_timer_node_link(
         self, metadata: EventMetadata,
         rcl_timer_handle: int, rcl_node_handle: int,
-    ) -> None:
-        self._timer_node_links.append({
+    ) -> Dict[str, Any]:
+        obj = {
             'timestamp': metadata.timestamp,
             'pid': metadata.pid,
             'tid': metadata.tid,
@@ -487,7 +559,9 @@ class Ros2DataModel(DataModel):
 
             'rcl_timer_handle': rcl_timer_handle,
             'rcl_node_handle': rcl_node_handle,
-        })
+        }
+        self._timer_node_links.append(obj)
+        return obj
 
     def _finalize_timer_node_links(self):
         self.timer_node_links = self._to_dataframe(
@@ -499,8 +573,8 @@ class Ros2DataModel(DataModel):
     def add_callback_object(
         self, metadata: EventMetadata,
         reference: int, callback_object: int,
-    ) -> None:
-        self._callback_objects.append({
+    ) -> Dict[str, Any]:
+        obj = {
             'timestamp': metadata.timestamp,
             'pid': metadata.pid,
             'tid': metadata.tid,
@@ -508,7 +582,9 @@ class Ros2DataModel(DataModel):
 
             'reference': reference,
             'callback_object': callback_object,
-        })
+        }
+        self._callback_objects.append(obj)
+        return obj
 
     def _finalize_callback_objects(self):
         self.callback_objects = self._to_dataframe(
@@ -520,8 +596,8 @@ class Ros2DataModel(DataModel):
     def add_callback_symbol(
         self, metadata: EventMetadata,
         callback_object: int, symbol: str,
-    ) -> None:
-        self._callback_symbols.append({
+    ) -> Dict[str, Any]:
+        obj = {
             'timestamp': metadata.timestamp,
             'pid': metadata.pid,
             'tid': metadata.tid,
@@ -529,7 +605,9 @@ class Ros2DataModel(DataModel):
 
             'callback_object': callback_object,
             'symbol': symbol,
-        })
+        }
+        self._callback_symbols.append(obj)
+        return obj
 
     def _finalize_callback_symbols(self):
         self.callback_symbols = self._to_dataframe(
@@ -541,8 +619,8 @@ class Ros2DataModel(DataModel):
     def add_callback_instance(
         self, metadata: EventMetadata,
         callback_object: int, start_timestamp: int, duration: int, intra_process: bool,
-    ) -> None:
-        self._callback_instances.append({
+    ) -> Dict[str, Any]:
+        obj = {
             'timestamp': metadata.timestamp,
             'pid': metadata.pid,
             'tid': metadata.tid,
@@ -552,7 +630,9 @@ class Ros2DataModel(DataModel):
             'start_timestamp': np.datetime64(start_timestamp, 'ns'),
             'duration': np.timedelta64(duration, 'ns'),
             'intra_process': intra_process,
-        })
+        }
+        self._callback_instances.append(obj)
+        return obj
 
     def _finalize_callback_instances(self):
         self.callback_instances = pd.DataFrame(
@@ -565,78 +645,84 @@ class Ros2DataModel(DataModel):
 
     def add_rmw_take_instance(
         self, metadata: EventMetadata,
-        rmw_subscription_handle: int, message: int, source_timestamp: int, taken: bool,
-    ) -> None:
-        self._rmw_take_instances.append({
+        rmw_subscription_handle: int, message_handle: int, source_timestamp: int, taken: bool,
+    ) -> Dict[str, Any]:
+        obj = {
             'timestamp': metadata.timestamp,
             'pid': metadata.pid,
             'tid': metadata.tid,
             'cpu_id': metadata.cpu_id,
 
             'rmw_subscription_handle': rmw_subscription_handle,
-            'message': message,
+            'message_handle': message_handle,
             'source_timestamp': source_timestamp,
             'taken': taken,
-        })
+        }
+        self._rmw_take_instances.append(obj)
+        return obj
 
     def _finalize_rmw_take_instances(self):
         self.rmw_take_instances = pd.DataFrame(
             data=self._rmw_take_instances,
             columns=[
                 'timestamp', 'pid', 'tid', 'cpu_id',
-                'rmw_subscription_handle', 'message', 'source_timestamp', 'taken',
+                'rmw_subscription_handle', 'message_handle', 'source_timestamp', 'taken',
             ],
         )
 
     def add_rcl_take_instance(
         self, metadata: EventMetadata,
-        message: int,
-    ) -> None:
-        self._rcl_take_instances.append({
+        message_handle: int,
+    ) -> Dict[str, Any]:
+        obj = {
             'timestamp': metadata.timestamp,
             'pid': metadata.pid,
             'tid': metadata.tid,
             'cpu_id': metadata.cpu_id,
 
-            'message': message,
-        })
+            'message_handle': message_handle,
+        }
+        self._rcl_take_instances.append(obj)
+        return obj
 
     def _finalize_rcl_take_instances(self):
         self.rcl_take_instances = pd.DataFrame(
             data=self._rcl_take_instances,
             columns=[
                 'timestamp', 'pid', 'tid', 'cpu_id',
-                'message',
+                'message_handle',
             ],
         )
 
     def add_rclcpp_take_instance(
         self, metadata: EventMetadata,
-        message: int,
-    ) -> None:
-        self._rclcpp_take_instances.append({
+        message_handle: int,
+    ) -> Dict[str, Any]:
+        obj = {
             'timestamp': metadata.timestamp,
             'pid': metadata.pid,
             'tid': metadata.tid,
             'cpu_id': metadata.cpu_id,
 
-            'message': message,
-        })
+            'message_handle': message_handle,
+        }
+        self._rclcpp_take_instances.append(obj)
+        return obj
 
     def _finalize_rclcpp_take_instances(self):
         self.rclcpp_take_instances = pd.DataFrame(
             data=self._rclcpp_take_instances,
             columns=[
                 'timestamp', 'pid', 'tid', 'cpu_id',
-                'message',
+                'message_handle',
             ],
         )
 
-    def add_lifecycle_state_machine(
+    def add_rcl_lifecycle_state_machine(
         self, metadata: EventMetadata,
         rcl_node_handle: int, rcl_state_machine_handle: int,
-    ) -> None:
-        self._lifecycle_state_machines.append({
+    ) -> Dict[str, Any]:
+        obj = {
             'timestamp': metadata.timestamp,
             'pid': metadata.pid,
             'tid': metadata.tid,
@@ -644,20 +730,22 @@ class Ros2DataModel(DataModel):
 
             'rcl_node_handle': rcl_node_handle,
             'rcl_state_machine_handle': rcl_state_machine_handle,
-        })
+        }
+        self._lifecycle_state_machines.append(obj)
+        return obj
 
-    def _finalize_lifecycle_state_machines(self):
-        self.lifecycle_state_machines = self._to_dataframe(
+    def _finalize_rcl_lifecycle_state_machines(self):
+        self.rcl_lifecycle_state_machines = self._to_dataframe(
             data=self._lifecycle_state_machines,
             key='rcl_state_machine_handle',
             columns=['rcl_node_handle'],
         )
 
-    def add_lifecycle_state_transition(
+    def add_rcl_lifecycle_state_transition(
         self, metadata: EventMetadata,
         rcl_state_machine_handle: int, start_label: str, goal_label: str,
-    ) -> None:
-        self._lifecycle_transitions.append({
+    ) -> Dict[str, Any]:
+        obj = {
             'timestamp': metadata.timestamp,
             'pid': metadata.pid,
             'tid': metadata.tid,
@@ -666,11 +754,13 @@ class Ros2DataModel(DataModel):
             'rcl_state_machine_handle': rcl_state_machine_handle,
             'start_label': start_label,
             'goal_label': goal_label,
-        })
+        }
+        self._rcl_lifecycle_transitions.append(obj)
+        return obj
 
-    def _finalize_lifecycle_transitions(self):
-        self.lifecycle_transitions = pd.DataFrame(
-            data=self._lifecycle_transitions,
+    def _finalize_rcl_lifecycle_transitions(self):
+        self.rcl_lifecycle_transitions = pd.DataFrame(
+            data=self._rcl_lifecycle_transitions,
             columns=[
                 'timestamp', 'pid', 'tid', 'cpu_id',
                 'rcl_state_machine_handle', 'start_label', 'goal_label',
@@ -680,11 +770,10 @@ class Ros2DataModel(DataModel):
     def _finalize(self) -> None:
         self._finalize_dds_writers()
         self._finalize_dds_readers()
-        self._finalize_dds_write_pre_instances()
         self._finalize_dds_write_instances()
         self._finalize_dds_read_instances()
-        self._finalize_contexts()
-        self._finalize_nodes()
+        self._finalize_rcl_contexts()
+        self._finalize_rcl_nodes()
         self._finalize_rmw_publishers()
         self._finalize_rcl_publishers()
         self._finalize_rclcpp_publish_instances()
@@ -693,9 +782,9 @@ class Ros2DataModel(DataModel):
         self._finalize_rmw_subscriptions()
         self._finalize_rcl_subscriptions()
         self._finalize_rclcpp_subscriptions()
-        self._finalize_services()
-        self._finalize_clients()
-        self._finalize_timers()
+        self._finalize_rcl_services()
+        self._finalize_rcl_clients()
+        self._finalize_rcl_timers()
         self._finalize_timer_node_links()
         self._finalize_callback_objects()
         self._finalize_callback_symbols()
@@ -703,16 +792,16 @@ class Ros2DataModel(DataModel):
         self._finalize_rmw_take_instances()
         self._finalize_rcl_take_instances()
         self._finalize_rclcpp_take_instances()
-        self._finalize_lifecycle_state_machines()
-        self._finalize_lifecycle_transitions()
+        self._finalize_rcl_lifecycle_state_machines()
+        self._finalize_rcl_lifecycle_transitions()
 
     def print_data(self) -> None:
         print('====================ROS 2 DATA MODEL===================')
-        print('Contexts:')
-        print(self.contexts.to_string())
+        print('Contexts (rcl):')
+        print(self.rcl_contexts.to_string())
         print()
-        print('Nodes:')
-        print(self.nodes.to_string())
+        print('Nodes (rcl):')
+        print(self.rcl_nodes.to_string())
         print()
         print('Publishers (rmw):')
         print(self.rmw_publishers.to_string())
@@ -729,14 +818,14 @@ class Ros2DataModel(DataModel):
         print('Subscriptions (rclcpp):')
         print(self.rclcpp_subscriptions.to_string())
         print()
-        print('Services:')
-        print(self.services.to_string())
+        print('Services: (rcl)')
+        print(self.rcl_services.to_string())
         print()
-        print('Clients:')
-        print(self.clients.to_string())
+        print('Clients: (rcl)')
+        print(self.rcl_clients.to_string())
         print()
-        print('Timers:')
-        print(self.timers.to_string())
+        print('Timers: (rcl)')
+        print(self.rcl_timers.to_string())
         print()
         print('Timer-node links:')
         print(self.timer_node_links.to_string())
@@ -768,9 +857,9 @@ class Ros2DataModel(DataModel):
         print('Take instances (rclcpp):')
         print(self.rclcpp_take_instances.to_string())
         print()
-        print('Lifecycle state machines:')
-        print(self.lifecycle_state_machines.to_string())
+        print('Lifecycle state machines: (rcl)')
+        print(self.rcl_lifecycle_state_machines.to_string())
         print()
-        print('Lifecycle transitions:')
-        print(self.lifecycle_transitions.to_string())
+        print('Lifecycle transitions: (rcl)')
+        print(self.rcl_lifecycle_transitions.to_string())
         print('==================================================')

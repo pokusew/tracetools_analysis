@@ -88,19 +88,13 @@ HandlerMap = Dict[str, HandlerMethod]
 HandlerMultimap = Dict[str, List[HandlerMethod]]
 
 
-class Dependant():
+class Dependant:
     """
     Object which depends on other types.
 
     A dependant depends on other types which might have dependencies themselves.
     Dependencies are type-related only.
     """
-
-    def __init__(
-        self,
-        **kwargs,
-    ) -> None:
-        pass
 
     @staticmethod
     def dependencies() -> List[Type['Dependant']]:
